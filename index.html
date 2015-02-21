@@ -1,0 +1,172 @@
+<html>
+
+<head>
+<style type="text/css">
+.knitr.inline {
+  background-color: #f7f7f7;
+  border:solid 1px #B0B0B0;
+}
+.error {
+	font-weight: bold;
+	color: #FF0000;
+},
+.warning {
+	font-weight: bold;
+}
+.message {
+	font-style: italic;
+}
+.source, .output, .warning, .error, .message {
+	padding: 0em 1em;
+  border:solid 1px #F7F7F7;
+}
+.source {
+  background-color: #f5f5f5;
+}
+.rimage.left {
+  text-align: left;
+}
+.rimage.right {
+  text-align: right;
+}
+.rimage.center {
+  text-align: center;
+}
+.hl.num {
+  color: #AF0F91;
+}
+.hl.str {
+  color: #317ECC;
+}
+.hl.com {
+  color: #AD95AF;
+  font-style: italic;
+}
+.hl.opt {
+  color: #000000;
+}
+.hl.std {
+  color: #585858;
+}
+.hl.kwa {
+  color: #295F94;
+  font-weight: bold;
+}
+.hl.kwb {
+  color: #B05A65;
+}
+.hl.kwc {
+  color: #55aa55;
+}
+.hl.kwd {
+  color: #BC5A65;
+  font-weight: bold;
+}
+</style>
+<title>Predicting qualitative dumbbell exercises: Coursera Practical ML</title>
+</head>
+
+<body>
+
+<p>
+Disclaimer: This is the first time I use R and its corresponding ML libraries. So solutions usage of R might be unconventional and not elegant, however functional. Also I refrained from squeezing out the last % of estimated out-of-model accuracy because of runtime constraints with a puny macbook air. Have fun!
+</p>
+<h1>Prepare, clean and understand the data
+</h1>
+<h2>
+Understand the domain and measurements
+</h2>
+<p>
+According to the paper, the process of instructed lifting was recorded into timeslots of 2,5 secs with an 0,5 secs overlap. Common sense suggests, that specific measurements for certain classes of exercises would then have a distinct distribution.
+<h2>
+Cleaning data and test set
+</h2>
+<p>
+Time windows are apparently sampled irrespective of a specific event (such as on rep is finished) but discretely. Hence, just drawing a random sample from the whole training set is appropriate.
+</p>
+<div class="chunk" id="unnamed-chunk-1"><div class="rcode"><div class="source"><pre class="knitr r"><span class="hl std">inTrain</span> <span class="hl kwb">&lt;-</span> <span class="hl kwd">createDataPartition</span><span class="hl std">(</span><span class="hl kwc">y</span><span class="hl std">=pml_training</span><span class="hl opt">$</span><span class="hl std">classe,</span> <span class="hl kwc">p</span> <span class="hl std">=</span> <span class="hl num">0.7</span><span class="hl std">,</span> <span class="hl kwc">list</span><span class="hl std">=F)</span>
+</pre></div>
+</div></div>
+<p>
+Furthermore, for each new time window, summary statistics are included as indicated by the variable "new_window". Acutally, one could go forward and just see whether the summary statistics are enough to predict convincingly. In fact, distributions of key summary variables are apparent.
+</p>
+<div class="chunk" id="unnamed-chunk-2"><div class="rcode"><div class="source"><pre class="knitr r"><span class="hl kwd">plot</span><span class="hl std">(</span><span class="hl kwc">x</span><span class="hl std">=training_new</span><span class="hl opt">$</span><span class="hl std">max_roll_belt,</span> <span class="hl kwc">y</span><span class="hl std">=training_new</span><span class="hl opt">$</span><span class="hl std">classe)</span>
+</pre></div>
+</div><div class="rimage default"><img src="figure/unnamed-chunk-2-1.png" title="plot of chunk unnamed-chunk-2" alt="plot of chunk unnamed-chunk-2" class="plot" /></div></div>
+<p>
+However, looking at the test data where no summary statistics are given and the much higher number of total observations, leads to the conclusion to use only the finer granularity data and prune summary statistics indicated by many (all) NAs values. Note: DIV/0 values are also treated as NA which could be due to sensor errors. This yields a filtered training set with __ columns.
+</p>
+<div class="chunk" id="unnamed-chunk-3"><div class="rcode"><div class="source"><pre class="knitr r"><span class="hl std">training_filter</span> <span class="hl kwb">&lt;-</span> <span class="hl std">training[,</span> <span class="hl kwd">colSums</span><span class="hl std">(</span><span class="hl kwd">is.na</span><span class="hl std">(training))</span> <span class="hl opt">&lt;</span> <span class="hl kwd">nrow</span><span class="hl std">(training)</span><span class="hl opt">*</span><span class="hl num">0.95</span><span class="hl std">]</span>
+</pre></div>
+</div></div>
+<h2>
+Exploratory Data Analysis
+</h2>
+<p>
+Plotting the yaw angle of the arm with colour coding of the excercise class confirms the intuition from before, that distributions are distinct for specific valriables. Similar patterns can be found with other variables.
+</p>
+<div class="chunk" id="unnamed-chunk-4"><div class="rcode"><div class="source"><pre class="knitr r"><span class="hl kwd">plot</span><span class="hl std">(training_filter</span><span class="hl opt">$</span><span class="hl std">yaw_arm, training_filter</span><span class="hl opt">$</span><span class="hl std">raw_timestamp_part_2,</span> <span class="hl kwc">col</span><span class="hl std">=training_filter</span><span class="hl opt">$</span><span class="hl std">classe)</span>
+</pre></div>
+</div><div class="rimage default"><img src="figure/unnamed-chunk-4-1.png" title="plot of chunk unnamed-chunk-4" alt="plot of chunk unnamed-chunk-4" class="plot" /></div></div>
+<p>
+Thus, a high-dimensional model would probably best capture the dependent variable classe. However, to check whether there is a very simple model capable to explain classe, a two-factor pca plot is done.
+</p>
+<div class="chunk" id="unnamed-chunk-5"><div class="rcode"><div class="source"><pre class="knitr r"><span class="hl kwd">plot</span><span class="hl std">(training_PC[,</span><span class="hl num">1</span><span class="hl std">], training_PC[,</span><span class="hl num">2</span><span class="hl std">],</span> <span class="hl kwc">col</span><span class="hl std">=training</span><span class="hl opt">$</span><span class="hl std">classe)</span>
+</pre></div>
+</div><div class="rimage default"><img src="figure/unnamed-chunk-5-1.png" title="plot of chunk unnamed-chunk-5" alt="plot of chunk unnamed-chunk-5" class="plot" /></div></div>
+<p>
+Clustering in this unsupervised fashion doesn't coincide with classe. So we will use method that is fine with detecting important features more or less automatically with little extra manual selection.
+</p>
+<h1>
+Choosing Algorithm
+</h1>
+<p>
+Our conclusion so far was, that classe depends on numerous interactions between single variables whereas simplification is not trivial nor obvious (e.g. almost all variables have significant variance). Furthermore, distribution of values is oftentimes not bell shaped, but skewed and with multiple peaks. Automatic detection of important features, structures should therefore happen with random forests (RFs). RFs are less susceptible to non normal distributions and <e>"can capture complex interaction structures in the data"</e> (The Elements of
+Statistical Learning 2nd edition, 588 pp). 
+</p>
+<h2>
+Manual Pruning
+</h2>
+<p>
+Obvious choices of variables to exclude are if thy apply to a specific individual (thus countering generalizability), sequential integers and data used for 'house_keeping'. The final set of excluded variables is: "row.names", "X","user_name", "raw_timestamp_part_1", "cvtd_timestamp", "new_window" and "num_window". This leaves a training and testing set with 53 features and one dependent classification.
+</p>
+<h2>
+Model Tuning
+</h2>
+<p>
+Training with the standard parameters (number of trees, number of random variables picked, etc.) already yields an estimated out-of-sample accuracy of 0.9968. Although RFs are less prone to bias due to internal bootstrapping, we afford a seperate test set as mentioned in the beginning. First, because ample data is available. Second, we need to deal with NAs in more detail.
+</p>
+<p>
+Since quite some NAs are still in the data, we can try to optimize their treatment. RFs allow for an additional way beyond taking the mean: it can replace NAs during tree generation <a href=http://www.stat.berkeley.edu/~breiman/RandomForests/cc_manual.htm#l7>via proximity</a>. I used mfixrep=5 but with no improvement. Furthermore, different numbers of splitting variables besides the standard didn't yield any improvement either (mtry0), nor making a second run based on the most important (mdim2nd). This leads to the conclusion, that most parameters are ideal given the data at hand.
+</p>
+<h1>
+Final Model
+</h1>
+<p>
+The final random forest out-of-sample performance is estimated with a confusion matrix as follows.
+<pre>
+Confusion Matrix and Statistics
+
+          Reference
+Prediction    A    B    C    D    E
+         A 1674    0    0    0    0
+         B    2 1135    2    0    0
+         C    0    7 1018    1    0
+         D    0    0    4  959    1
+         E    0    0    0    2 1080
+
+Overall Statistics
+                                         
+               Accuracy : 0.9968         
+                 95% CI : (0.995, 0.9981)
+</pre>
+</p>
+<p>
+The same model predicted all 20 test cases from the assignment correctly. Furthermore, looking at the most import variables chosen is interesting.
+<img src="figure/imp.png"></img>
+</p>
+<p>
+This shows, that the belt angles with the pitch of the forearm and the z value of the dumbbell are most important. Because they are the main pivoting and relatively changing points throughout a dumbbell lift, this ranking and thus the model is very plausible.
+</p>
+</body>
+</html>
